@@ -1,0 +1,100 @@
+erDiagram
+  users ||--o{ timetables : "업로드"
+  users ||--o| routes : "설정"
+  users ||--o{ alarm_settings : "단계별 알림 설정"
+  users ||--o{ commute_plans : "날짜별 계획"
+  users ||--o{ recognition_logs : "인식 기록"
+  timetables ||--|{ timetable_days : "요일 5행"
+  commute_plans }o--o| transit_trips : "선택한 탑승편"
+  commute_plans ||--o{ notifications : "알림 예약"
+
+  users {
+    bigint id PK
+    varchar device_id UK "익명 기기 ID"
+    varchar timezone "Asia/Seoul"
+    timestamp created_at
+  }
+  timetables {
+    bigint id PK
+    bigint user_id FK
+    varchar status "draft | confirmed | replaced"
+    varchar theme "light | dark | background"
+    timestamp created_at
+    timestamp confirmed_at
+  }
+  timetable_days {
+    bigint id PK
+    bigint timetable_id FK
+    smallint weekday "0=월 ~ 4=금"
+    time first_class_time "NULL이면 공강·확인 필요"
+    varchar status "class | free | needs_check"
+    varchar source "ocr | user"
+    real confidence
+  }
+  routes {
+    bigint id PK
+    bigint user_id FK
+    varchar origin_name
+    varchar mode "subway_express | bus"
+    varchar line_id "노선 ID"
+    varchar stop_id "승차역·정류장 ID"
+    varchar direction
+    smallint home_to_stop_min "집→승차 이동"
+    smallint ride_to_school_min "하차→강의실"
+    smallint board_buffer_min "탑승 여유"
+    smallint arrive_buffer_min "수업 전 여유"
+    smallint prep_min "준비 시간"
+    timestamp updated_at
+  }
+  alarm_settings {
+    bigint id PK
+    bigint user_id FK
+    varchar stage "prep | depart"
+    smallint repeat_count ">= 1"
+    smallint interval_min ">= 1"
+  }
+  transit_trips {
+    bigint id PK
+    varchar line_id
+    varchar stop_id
+    varchar direction
+    varchar day_type "weekday | sat | holiday"
+    time departure_time "승차 지점 출발"
+    time arrival_time "학교 쪽 하차"
+    boolean is_express
+    timestamp fetched_at
+    timestamp valid_until
+  }
+  commute_plans {
+    bigint id PK
+    bigint user_id FK
+    date service_date
+    bigint timetable_day_id FK
+    bigint trip_id FK
+    time target_arrival
+    time boarding_time
+    time depart_time
+    time prep_start_time
+    varchar info_basis "realtime | timetable | none"
+    timestamp info_fetched_at
+    varchar status "planned | prep_done | departed | no_trip | free_day"
+  }
+  notifications {
+    bigint id PK
+    bigint plan_id FK
+    varchar stage "prep | depart"
+    smallint seq "1..n"
+    timestamp scheduled_at
+    varchar status "scheduled | sent | cancelled | failed"
+    varchar cancel_reason
+  }
+  recognition_logs {
+    bigint id PK
+    bigint user_id FK
+    char image_sha256 "원본 이미지는 저장 안 함"
+    varchar theme
+    integer processing_ms
+    varchar result_status "ok | needs_check | error"
+    text error_message
+    timestamp created_at
+  }

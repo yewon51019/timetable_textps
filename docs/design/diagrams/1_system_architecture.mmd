@@ -1,0 +1,33 @@
+flowchart LR
+  subgraph CLIENT["📱 클라이언트 (모바일 앱)"]
+    UI["화면<br/>업로드 · 인식 확인/수정<br/>경로·시간 설정 · 알림 목록"]
+    LN["기기 로컬 알림<br/>(예약 · 취소)"]
+  end
+
+  subgraph SERVER["🖥️ FastAPI 서버"]
+    API["REST API 라우터<br/>/timetables · /settings<br/>/plans · /notifications"]
+    OCR["FR-01 시간표 인식 모듈<br/>격자 검출 + 색 분할<br/>+ PaddleOCR 시간축 보정"]
+    CALC["FR-02 도착 목표 계산<br/>첫 수업 − 여유 시간"]
+    MATCH["FR-03 탑승편 매칭<br/>출발·준비 시각 확정"]
+    NOTI["FR-04 알림 계획<br/>단계별 횟수·간격 → 예약 목록"]
+    ADP["교통정보 어댑터<br/>(API 호출 + 캐시 + 대체)"]
+    SCHED["스케줄러<br/>(매일 새벽 다음 수업일 재계산)"]
+  end
+
+  DB[("🗄️ SQL DB<br/>사용자 · 시간표 · 설정<br/>교통 캐시 · 계획 · 알림 · 로그")]
+  EXT["🌐 공공 교통 API<br/>1호선 열차 시각표<br/>안양대 방면 버스 도착정보"]
+
+  UI -- "HTTPS / JSON" --> API
+  API --> OCR
+  API --> CALC
+  CALC --> MATCH
+  MATCH --> ADP
+  ADP -- "HTTP 조회" --> EXT
+  MATCH --> NOTI
+  SCHED --> CALC
+  OCR -. "이미지는 메모리에서만 처리 후 폐기" .-> API
+  API <--> DB
+  ADP <--> DB
+  NOTI --> DB
+  API -- "알림 예약 목록 응답" --> UI
+  UI --> LN
