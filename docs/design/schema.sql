@@ -59,14 +59,16 @@ CREATE TABLE route_legs (
     kind                VARCHAR(8)  NOT NULL CHECK (kind IN ('walk', 'subway', 'bus')),
     minutes             SMALLINT    CHECK (minutes >= 0),   -- walk: 걷는 시간 / bus: 승차~하차 시간
     -- subway (KRIC subwayRouteInfo 의 코드)
-    rail_opr_cd         VARCHAR(4),                         -- KR = 한국철도
+    board_rail_opr_cd   VARCHAR(4),                         -- 역마다 운영기관이 다를 수 있음 (KR 한국철도, S1 서울교통공사)
+    alight_rail_opr_cd  VARCHAR(4),
     ln_cd               VARCHAR(4),                         -- 1 = 1호선
     board_stin_cd       VARCHAR(8),
     board_stin_nm       VARCHAR(30),
     alight_stin_cd      VARCHAR(8),
     alight_stin_nm      VARCHAR(30),
     express_only        BOOLEAN     DEFAULT TRUE,
-    -- bus (경기도 버스 v2 의 ID)
+    -- bus: 어느 기관 API를 부를지는 노선 소속으로 결정 (ODsay busCityCode = 1000 → seoul, 그 외 수도권 → gyeonggi)
+    bus_provider        VARCHAR(10) CHECK (bus_provider IN ('seoul', 'gyeonggi')),
     bus_route_id        VARCHAR(12),
     bus_route_name      VARCHAR(20),
     board_station_id    VARCHAR(12),
@@ -74,8 +76,9 @@ CREATE TABLE route_legs (
     alight_station_id   VARCHAR(12),
     UNIQUE (route_id, seq),
     CHECK (kind <> 'walk'   OR minutes IS NOT NULL),
-    CHECK (kind <> 'subway' OR (ln_cd IS NOT NULL AND board_stin_cd IS NOT NULL AND alight_stin_cd IS NOT NULL)),
-    CHECK (kind <> 'bus'    OR (minutes IS NOT NULL AND bus_route_id IS NOT NULL
+    CHECK (kind <> 'subway' OR (ln_cd IS NOT NULL AND board_stin_cd IS NOT NULL AND alight_stin_cd IS NOT NULL
+                                AND board_rail_opr_cd IS NOT NULL AND alight_rail_opr_cd IS NOT NULL)),
+    CHECK (kind <> 'bus'    OR (minutes IS NOT NULL AND bus_provider IS NOT NULL AND bus_route_id IS NOT NULL
                                 AND board_station_id IS NOT NULL AND board_sta_order IS NOT NULL))
 );
 
@@ -105,15 +108,18 @@ CREATE TABLE subway_timetables (
     PRIMARY KEY (rail_opr_cd, ln_cd, stin_cd, day_cd, trn_no)
 );
 
--- FR-03 버스 노선 정보 캐시 = 경기 getBusRouteInfoItemv2 (첫차·막차·배차). 버스는 시각표가 없어 배차로 계획
+-- FR-03 버스 노선 정보 캐시. 버스는 정시 시각표가 없어 배차로 계획
+--   경기: getBusRouteInfoItemv2 (peekAlloc / nPeekAlloc), 서울: getRouteInfo (term)
 CREATE TABLE bus_routes (
-    bus_route_id   VARCHAR(12) PRIMARY KEY,
+    bus_provider   VARCHAR(10) NOT NULL CHECK (bus_provider IN ('seoul', 'gyeonggi')),
+    bus_route_id   VARCHAR(12) NOT NULL,
     route_name     VARCHAR(20) NOT NULL,
-    up_first_time  TIME,
-    up_last_time   TIME,
-    peek_alloc     SMALLINT,    -- 평일 최소 배차(분)
-    npeek_alloc    SMALLINT,    -- 평일 최대 배차(분) → 최악 대기 시간으로 사용
-    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    first_time     TIME,
+    last_time      TIME,
+    headway_min    SMALLINT,    -- 경기 peekAlloc / 서울 term
+    headway_max    SMALLINT,    -- 경기 nPeekAlloc / 서울 term → 최악 대기 시간으로 사용
+    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (bus_provider, bus_route_id)
 );
 
 -- FR-03 결과: 사용자 × 날짜 1행. 구간별 상세(열차번호, 버스 대기 근거)는 steps 에 그대로 저장

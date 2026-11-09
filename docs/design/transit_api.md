@@ -1,15 +1,20 @@
-# 교통 API 결정서 v0.1 — 무엇을, 언제, 어떻게 부르고 어떻게 조합하나
+# 교통 API 결정서 v0.2 — 무엇을, 언제, 어떻게 부르고 어떻게 조합하나
 
 근거: PRD v0.1 FR-02·FR-03, 6.2 "실제 API 선정(1호선 급행·버스), 요청·응답 포맷".
-명세는 공공데이터포털·철도산업정보센터(KRIC) 페이지에서 직접 확인했습니다 (2026-11-09).
+명세는 공공데이터포털·철도산업정보센터(KRIC)·ODsay 레퍼런스 페이지와 서울시 활용가이드에서 직접 확인했습니다 (2026-11-09).
+
+> v0.2 변경: 출발지가 사용자 지정 장소(서울·경기 어디든)일 수 있어서 **경로 검색은 ODsay**, **서울 버스 API 추가**, 버스 구간마다 서울/경기 분기 (6절).
 
 ## 1. 결정 요약
 
 | 구간 | 쓰는 API | 이유 |
 |---|---|---|
 | **1호선 (급행 포함) 시각표** | **KRIC `trainUseInfo/subwayTimetableExp`** (열차별 운행시각표, 급행 표시) | 응답에 **급행구분 `exptCd`** 와 **열차번호 `trnNo`** 가 있는 유일한 후보. 열차번호로 승차역·하차역 시각을 맞출 수 있음 |
-| 1호선 역 코드 | **KRIC `trainUseInfo/subwayRouteInfo`** | 위 API의 `stinCd`(역코드)·`railOprIsttCd`(운영기관) 획득 |
-| **버스 정류소·노선 찾기** | **경기도 `busstationservice/v2`** (정류소 조회) | 안양 마을버스·시내버스는 경기도 버스정보 시스템 소관 |
+| 지하철 (1호선 외 노선) 시각표 | 같은 KRIC `subwayTimetableExp` | 수도권 운영기관 전체(코레일·서울교통공사 등)를 `railOprIsttCd`로 구분해 같은 방식으로 조회 |
+| 지하철 역 코드 | **KRIC `trainUseInfo/subwayRouteInfo`** | 위 API의 `stinCd`(역코드)·`railOprIsttCd`(운영기관) 획득 |
+| **경로 검색 (등록 시 1회)** | **ODsay `searchPubTransPathT`** | 좌표 → 경로 후보. 구간마다 **지역 BIS의 노선ID·정류소ID**(`busLocalBlID`, `startLocalStationID`)를 함께 줘서 아래 기관 API로 바로 이어짐 |
+| **서울 버스 배차·실시간** | **서울시 `busRouteInfo/getRouteInfo`, `getStaionByRoute`, `arrive/getArrInfoByRoute`** | 서울 시내버스 구간 (ODsay `busCityCode = 1000`) |
+| **버스 정류소·노선 찾기 (경로 수동 수정용)** | **경기도 `busstationservice/v2`** (정류소 조회) | 안양 마을버스·시내버스는 경기도 버스정보 시스템 소관 |
 | 버스 경유 정류소 순서 | **경기도 `busrouteservice/v2/getBusRouteStationListv2`** | 승차→하차 정류장 수, 도착정보 조회에 필요한 `staOrder` |
 | **버스 배차 (계획용)** | **경기도 `busrouteservice/v2/getBusRouteInfoItemv2`** | 버스는 **정시 시각표가 없음** → 첫차·막차·최대 배차간격으로 계획 |
 | **버스 실시간 (당일)** | **경기도 `busarrivalservice/v2/getBusArrivalItemv2`** | 다음 버스 2대 도착 예정(초 단위) |
@@ -20,7 +25,8 @@
 | 국토교통부 TAGO 지하철정보 `1613000/SubwayInfo/GetSubwaySttnAcctoSchdulList` | 응답에 **급행 여부·열차번호가 없음** (`depTime`, `arrTime`, `endSubwayStationNm` 뿐) → 급행 구분도, 하차역 시각 연결도 불가. KRIC 장애 시 "일반 열차 시각"용 예비로만 고려 |
 | 서울교통공사 역별 시간표 (data.go.kr 15057982 등) | 서울교통공사 운영 구간만 제공. **안양·금정·명학은 한국철도(코레일) 구간** |
 | 서울시 실시간 지하철 도착정보 | 급행 표시가 있지만 MVP 범위(시각표 기반 계획)를 넘음 → Should 기능으로 보류 |
-| 길찾기(경로 탐색) API | PRD상 사용자가 **선호 경로를 직접 등록**하므로 경로 탐색이 필요 없음. 구간별 API로 충분 |
+| 서울시 대중교통환승경로 `pathinfo/getPathInfoByBusNSub` | 공공·무료지만 응답이 구간별 `routeId·fid·tid` 뿐이고 **도보 시간·노선 소속 구분이 없음**. 서울 버스정보 기반이라 경기 마을버스 포함 여부도 불확실 → ODsay 장애 시 예비 |
+| 길찾기를 매일 호출 | ODsay는 **경로 등록·변경 때만** 호출. 매일 계산은 구간별 기관 API(시각표·배차·실시간)로 → 호출량이 적어 무료 등급으로 충분할 가능성이 큼 (정확한 무료 한도는 ODsay 콘솔에서 확인) |
 
 ## 2. 호출 시점별 흐름
 
@@ -117,6 +123,83 @@ t = 첫 수업 − 수업 전 여유                                (도착 목�
 | 실제 JSON 감싸는 구조 | ❌ 키 필요 | 클라이언트는 구조를 유연하게 파싱하도록 작성, 응답 샘플을 `api_samples/`에 저장해 확정 |
 
 ### 키 발급 (팀원 1명이 발급해 공유하지 말고 각자 발급 권장)
-1. **data.go.kr**: 회원가입 → "경기도_정류소 조회", "경기도_버스노선 조회", "경기도_버스도착정보 조회" 활용신청 → 마이페이지의 **일반 인증키(Decoding)**
+1. **data.go.kr**: 회원가입 → "경기도_정류소 조회", "경기도_버스노선 조회", "경기도_버스도착정보 조회", "서울특별시_노선정보조회 서비스", "서울특별시_버스도착정보조회 서비스" 활용신청 → 마이페이지의 **일반 인증키(Decoding)**
 2. **KRIC**: openapi.kric.go.kr 회원가입 → "열차별 운행시각표(급행)", 노선 구성역 정보(`subwayRouteInfo`) 활용신청 → 서비스키
-3. `.env` 또는 셸에 `DATA_GO_KR_KEY`, `KRIC_KEY` 설정 (깃에 올리지 않기)
+3. **ODsay**: lab.odsay.com 가입 → 애플리케이션 등록, 플랫폼 "서버"에 호출할 서버 IP 등록 → API Key
+4. `.env` 또는 셸에 `DATA_GO_KR_KEY`, `KRIC_KEY`, `ODSAY_KEY` 설정 (깃에 올리지 않기)
+
+## 6. 경로 검색과 서울·경기 분기 (v0.2 추가)
+
+### 6.1 경로 검색은 ODsay로, 한 번만
+```
+① 출발지: 사용자가 지도에서 찍거나 장소를 검색 → 좌표(경도, 위도)
+   (장소 검색은 앱의 지도 SDK 또는 카카오 로컬 API 등 — 좌표만 얻으면 됨)
+② 도착지: 안양대 좌표 고정
+③ ODsay searchPubTransPathT(SX, SY, EX, EY, SearchPathType=0) → 경로 후보 목록
+④ 사용자가 후보 하나 선택 → transit/route_search.py 의 legs_from_path() 로 route_legs 생성
+⑤ 지하철 구간: KRIC subwayRouteInfo 로 역 이름 → stinCd·운영기관 코드 채움 (resolve_subway_codes)
+   버스 구간  : 노선 경유정류소 API로 승차 정류소 순번(staOrder / ord) 채움 (find_sta_order)
+```
+- ODsay 키는 **서버 IP 등록 방식**(플랫폼 '서버', 최대 5개)이라 FastAPI 서버에서만 호출합니다.
+- ODsay `subPath[]` 구간: `trafficType` 1 지하철 / 2 버스 / 3 도보, `sectionTime`(분), `stationCount`, `intervalTime`(평균 배차)
+  - 버스: `lane[].busNo`, `busLocalBlID`(지역 노선ID), `busCityCode`, `startLocalStationID`, `endLocalStationID`, `startArsID`
+  - 지하철: `lane[].name`, `subwayCode`, `startName`, `endName`, `wayCode`(1 상행 / 2 하행)
+
+### 6.2 버스 구간: 어느 기관 API를 부를지는 **노선 소속**으로 정한다
+ODsay 레퍼런스: *"수도권: busCityCode 가 1000 인 경우 서울, 그 외에는 경기 실시간 사용"*.
+**정류소가 서울에 있느냐가 아니라 그 노선이 어느 BIS 소속이냐**가 기준입니다.
+
+| 경우 | 예 | 부를 API |
+|---|---|---|
+| 서울 버스, 서울 안에서만 | 서울 집 → 사당역 | 서울 |
+| 서울 버스가 경기로 들어옴 | 서울 시내버스로 안양 진입 | **서울** (`busCityCode = 1000`) |
+| 경기 버스가 서울에서 출발 | 사당역(서울)에서 경기 광역·시내버스 탑승 | **경기** (`busCityCode ≠ 1000`) |
+| 경기 버스, 경기 안에서만 | 안양역 → 안양대 마을버스 | 경기 |
+
+| 단계 | 경기 (`bus_provider = gyeonggi`) | 서울 (`bus_provider = seoul`) |
+|---|---|---|
+| 노선ID | ODsay `busLocalBlID` = 경기 `routeId` | ODsay `busLocalBlID` = 서울 `busRouteId` |
+| 정류소 순번 (등록 시) | `getBusRouteStationListv2(routeId)` → `stationSeq` | `getStaionByRoute(busRouteId)` → `seq` (`station` = 정류소 ID) |
+| 배차 (매일) | `getBusRouteInfoItemv2(routeId)` → `peekAlloc`, `nPeekAlloc` | `getRouteInfo(busRouteId)` → `term` |
+| 실시간 (당일) | `getBusArrivalItemv2(stationId, routeId, staOrder)` → `predictTimeSec1/2` | `getArrInfoByRoute(stId, busRouteId, ord)` → `exps1/2`(초) |
+| 키 | data.go.kr 일반 인증키 (서울·경기 같은 키, 서비스별 활용신청) | 〃 |
+| 프로토콜 | HTTPS | **HTTP만** (`ws.bus.go.kr`) |
+
+순환 노선은 같은 정류소가 두 번 나오므로, **하차 정류소보다 앞에 있는 순번**을 고릅니다 (`find_sta_order`).
+
+### 6.3 지하철 구간: 서울·경기 구분 없이 KRIC 하나로
+KRIC는 수도권 운영기관을 모두 다루고, 역마다 `railOprIsttCd`(KR 한국철도, S1 서울교통공사 등)가 붙습니다. 그래서 지하철 구간마다:
+```
+승차역 (운영기관 A, stinCd) 시각표 + 하차역 (운영기관 B, stinCd) 시각표 → trnNo 로 조인
+```
+- **환승**은 ODsay가 지하철 구간을 따로 끊어 주므로(예: 4호선 사당→금정, 도보 2분, 1호선 금정→안양) 구간마다 위 조인을 하고, 사이의 도보 구간을 그대로 이어 붙입니다.
+- **같은 노선에서 운영기관이 바뀌는 구간**(예: 1호선 서울역 쪽 서울교통공사 → 코레일, 4호선 서울 구간 → 과천선)은 승차역·하차역 운영기관이 다를 수 있어서 `route_legs`에 `board_rail_opr_cd`, `alight_rail_opr_cd`를 따로 둡니다.
+  - ⚠ 운영기관이 다른 두 역의 `trnNo`가 같은 열차를 같은 번호로 부르는지는 **키 발급 후 확인 필요**. 다르면 그 구간은 "승차역 출발 + ODsay `sectionTime`"으로 하차 시각을 추정하는 방식으로 대체합니다.
+- 급행 우선(`express_only`)은 MVP에서 1호선만 켭니다.
+
+### 6.4 예시 두 가지
+**서울 → 경기** (서울 집 → 서울 버스 → 사당 → 4호선 → 금정 → 1호선 급행 → 안양 → 경기 마을버스 → 안양대)
+```
+등록 시  ODsay 1회 → 구간 8개
+         KRIC subwayRouteInfo (4호선·1호선 역코드), 서울 getStaionByRoute, 경기 getBusRouteStationListv2
+매일     KRIC subwayTimetableExp × 4역 (사당, 금정[4호선], 금정[1호선], 안양)
+         서울 getRouteInfo, 경기 getBusRouteInfoItemv2
+당일     서울 getArrInfoByRoute (첫 버스), 경기 getBusArrivalItemv2 (마을버스)
+계산     안양대 도착 목표에서 거꾸로: 도보 → 마을버스(대기=최대 배차) → 도보 → 1호선 열차 선택 → 도보 → 4호선 열차 선택 → 도보 → 서울 버스(대기) → 도보
+```
+**경기 → 경기** (경기 집 → 경기 버스 → 안양대)
+```
+등록 시  ODsay 1회, 경기 getBusRouteStationListv2
+매일     경기 getBusRouteInfoItemv2
+당일     경기 getBusArrivalItemv2
+```
+
+### 6.5 확인 현황 (v0.2 추가분)
+| 항목 | 상태 |
+|---|---|
+| ODsay `searchPubTransPathT` 엔드포인트 | ✅ 존재 (가짜 키 → `ApiKeyAuthFailed`) |
+| ODsay 응답 필드·서울/경기 구분 규칙 | ✅ 레퍼런스 문서에서 확인 |
+| 서울 버스 API 3종 파라미터·응답 필드 | ✅ 활용가이드(docx)에서 확인 / ❌ 호출은 키 필요 + HTTP 전용이라 이 개발 환경 프록시로는 불가 |
+| ODsay `busLocalBlID`가 실제 경기 `routeId`와 같은 값인지 | ❌ 키 필요 (문서상 "경기 실시간 사용") |
+| 운영기관이 다른 역 사이 `trnNo` 일치 여부 | ❌ 키 필요 |
+| 변환·분기 로직 | ✅ 단위 테스트 5개 (`tests/test_route_search.py`) |

@@ -47,11 +47,13 @@ erDiagram
     varchar kind "walk | subway | bus"
     smallint minutes "걷기 / 버스 승차 시간"
     varchar ln_cd "KRIC 선코드"
+    varchar board_rail_opr_cd "역별 운영기관"
     varchar board_stin_cd "KRIC 승차역"
     varchar alight_stin_cd "KRIC 하차역"
     boolean express_only
-    varchar bus_route_id "경기 노선ID"
-    varchar board_station_id "경기 정류소ID"
+    varchar bus_provider "seoul | gyeonggi"
+    varchar bus_route_id "서울·경기 노선ID"
+    varchar board_station_id "정류소ID"
     smallint board_sta_order "정류소 순번"
   }
   alarm_settings {
@@ -70,11 +72,12 @@ erDiagram
     boolean is_express "exptCd 해석"
   }
   bus_routes {
+    varchar bus_provider PK "seoul | gyeonggi"
     varchar bus_route_id PK
     varchar route_name
-    time up_first_time
-    time up_last_time
-    smallint npeek_alloc "최대 배차 = 최악 대기"
+    time first_time
+    time last_time
+    smallint headway_max "최대 배차 = 최악 대기"
   }
   commute_plans {
     bigint id PK

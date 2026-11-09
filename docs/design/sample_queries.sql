@@ -16,8 +16,8 @@ INSERT INTO timetable_days (timetable_id, weekday, first_class_time, status, con
 -- FR-02: 경로 = 걷기 10분 → 1호선 급행(금정→안양) → 걷기 20분  (AC-03-04 예시값: 탑승 여유 3, 준비 30 / AC-02-03: 여유 15)
 INSERT INTO routes (user_id, arrive_buffer_min, board_buffer_min, prep_min) VALUES (1, 15, 3, 30);
 INSERT INTO route_legs (route_id, seq, kind, minutes) VALUES (1, 1, 'walk', 10);
-INSERT INTO route_legs (route_id, seq, kind, rail_opr_cd, ln_cd, board_stin_cd, board_stin_nm, alight_stin_cd, alight_stin_nm)
-VALUES (1, 2, 'subway', 'KR', '1', 'GJ', '금정', 'AY', '안양');   -- 역코드는 가상값 (실제 값은 KRIC 응답으로 채움)
+INSERT INTO route_legs (route_id, seq, kind, board_rail_opr_cd, alight_rail_opr_cd, ln_cd, board_stin_cd, board_stin_nm, alight_stin_cd, alight_stin_nm)
+VALUES (1, 2, 'subway', 'KR', 'KR', '1', 'GJ', '금정', 'AY', '안양');   -- 역코드는 가상값 (실제 값은 KRIC 응답으로 채움)
 INSERT INTO route_legs (route_id, seq, kind, minutes) VALUES (1, 3, 'walk', 20);
 INSERT INTO alarm_settings (user_id, stage, repeat_count, interval_min) VALUES
     (1, 'prep', 2, 10),
@@ -49,7 +49,7 @@ WHERE t.user_id = 1 AND t.status = 'confirmed' AND d.weekday = 0;
 \echo '② 열차 조인 결과와 선택된 열차'
 WITH r AS (
     SELECT rt.*, d.id AS day_id, d.first_class_time - make_interval(mins => rt.arrive_buffer_min) AS target,
-           s.rail_opr_cd, s.ln_cd, s.board_stin_cd, s.alight_stin_cd, s.express_only,
+           s.board_rail_opr_cd, s.alight_rail_opr_cd, s.ln_cd, s.board_stin_cd, s.alight_stin_cd, s.express_only,
            (SELECT minutes FROM route_legs WHERE route_id = rt.id AND seq = 1) AS walk_before,
            (SELECT minutes FROM route_legs WHERE route_id = rt.id AND seq = 3) AS walk_after
     FROM routes rt
@@ -60,8 +60,8 @@ WITH r AS (
 ), trips AS (
     SELECT b.trn_no, b.dpt_tm AS board_dep, a.arv_tm AS alight_arr, b.is_express
     FROM r
-    JOIN subway_timetables b ON (b.rail_opr_cd, b.ln_cd, b.stin_cd, b.day_cd) = (r.rail_opr_cd, r.ln_cd, r.board_stin_cd, '8')
-    JOIN subway_timetables a ON (a.rail_opr_cd, a.ln_cd, a.stin_cd, a.day_cd, a.trn_no) = (r.rail_opr_cd, r.ln_cd, r.alight_stin_cd, '8', b.trn_no)
+    JOIN subway_timetables b ON (b.rail_opr_cd, b.ln_cd, b.stin_cd, b.day_cd) = (r.board_rail_opr_cd, r.ln_cd, r.board_stin_cd, '8')
+    JOIN subway_timetables a ON (a.rail_opr_cd, a.ln_cd, a.stin_cd, a.day_cd, a.trn_no) = (r.alight_rail_opr_cd, r.ln_cd, r.alight_stin_cd, '8', b.trn_no)
     WHERE a.arv_tm > b.dpt_tm
 ), pick AS (
     SELECT trips.* FROM trips, r

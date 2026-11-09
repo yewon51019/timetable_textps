@@ -2,9 +2,11 @@
 
 - KRIC(철도산업정보센터, openapi.kric.go.kr): 1호선 역 코드, 열차별 운행시각표(급행 표시)
 - 경기도 버스(공공데이터포털, apis.data.go.kr/6410000): 정류소·노선·배차·실시간 도착
+- 서울 버스(공공데이터포털 키, ws.bus.go.kr — HTTP 전용): 노선 배차·경유 정류소·실시간 도착
+- ODsay(api.odsay.com): 대중교통 경로 검색 — 경로 등록할 때만 호출
 
-두 기관 모두 인증키를 **쿼리 파라미터 serviceKey** 로 받는다.
-키는 코드에 넣지 않고 환경변수 KRIC_KEY, DATA_GO_KR_KEY 로 읽는다.
+인증키는 모두 **쿼리 파라미터**로 넘긴다. 코드에 넣지 않고 환경변수로 읽는다:
+  KRIC_KEY, DATA_GO_KR_KEY(경기·서울 버스 공용), ODSAY_KEY
 """
 import os
 
@@ -125,3 +127,61 @@ class GyeonggiBusClient:
         items = self._get('busarrivalservice/v2/getBusArrivalItemv2', 'busArrivalItem',
                           stationId=station_id, routeId=route_id, staOrder=sta_order)
         return items[0] if items else None
+
+
+class SeoulBusClient:
+    """서울시 버스정보 (data.go.kr 키 공용). 서울 시내버스(ODsay busCityCode=1000) 구간에 사용."""
+
+    BASE = 'http://ws.bus.go.kr/api/rest'   # 기관이 HTTP만 제공
+
+    def __init__(self, key=None, session=None):
+        self.key = key or os.environ.get('DATA_GO_KR_KEY')
+        if not self.key:
+            raise ApiError('DATA_GO_KR_KEY 환경변수가 없습니다')
+        self.http = session or requests.Session()
+
+    def _get(self, path, **params):
+        r = self.http.get(f'{self.BASE}/{path}',
+                          params={'serviceKey': self.key, 'resultType': 'json', **params}, timeout=TIMEOUT)
+        data = r.json()
+        head = data.get('msgHeader') or data.get('comMsgHeader') or {}
+        if str(head.get('headerCd', '0')) not in ('0', '4'):   # 4 = 결과 없음
+            raise ApiError(f"서울버스 {path}: {head.get('headerCd')} {head.get('headerMsg')}")
+        items = (data.get('msgBody') or {}).get('itemList') or []
+        return items if isinstance(items, list) else [items]
+
+    def route_info(self, bus_route_id):
+        """배차간격 term(분), 첫차 firstBusTm, 막차 lastBusTm."""
+        items = self._get('busRouteInfo/getRouteInfo', busRouteId=bus_route_id)
+        return items[0] if items else None
+
+    def route_stations(self, bus_route_id):
+        """경유 정류소: seq(순번), station(정류소 고유 ID = stId), arsId, stationNm."""
+        return self._get('busRouteInfo/getStaionByRoute', busRouteId=bus_route_id)
+
+    def arrival(self, st_id, bus_route_id, ord_):
+        """다음 버스 2대: exps1/exps2(도착 예정 초), traTime1, arrmsg1."""
+        items = self._get('arrive/getArrInfoByRoute', stId=st_id, busRouteId=bus_route_id, ord=ord_)
+        return items[0] if items else None
+
+
+class OdsayClient:
+    """ODsay 대중교통 길찾기. 키는 서버 IP 등록 방식(플랫폼 '서버', 최대 5개)."""
+
+    BASE = 'https://api.odsay.com/v1/api'
+
+    def __init__(self, key=None, session=None):
+        self.key = key or os.environ.get('ODSAY_KEY')
+        if not self.key:
+            raise ApiError('ODSAY_KEY 환경변수가 없습니다 (lab.odsay.com 에서 발급)')
+        self.http = session or requests.Session()
+
+    def search_paths(self, sx, sy, ex, ey, path_type=0):
+        """도시내 경로 후보. path_type: 0 전체, 1 지하철만, 2 버스만. 좌표는 WGS84 (경도, 위도)."""
+        r = self.http.get(f'{self.BASE}/searchPubTransPathT', params={
+            'apiKey': self.key, 'SX': sx, 'SY': sy, 'EX': ex, 'EY': ey,
+            'OPT': 0, 'SearchPathType': path_type}, timeout=TIMEOUT)
+        data = r.json()
+        if 'error' in data:
+            raise ApiError(f"ODsay: {data['error']}")
+        return data['result'].get('path', [])
