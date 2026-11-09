@@ -15,14 +15,16 @@ flowchart LR
   end
 
   DB[("🗄️ SQL DB<br/>사용자 · 시간표 · 설정<br/>교통 캐시 · 계획 · 알림 · 로그")]
-  EXT["🌐 공공 교통 API<br/>1호선 열차 시각표<br/>안양대 방면 버스 도착정보"]
+  KRIC["🚆 KRIC 철도 Open API<br/>subwayRouteInfo (역코드)<br/>subwayTimetableExp (급행 시각표)"]
+  GG["🚌 경기도 버스정보 v2<br/>정류소·노선·배차·실시간 도착"]
 
   UI -- "HTTPS / JSON" --> API
   API --> OCR
   API --> CALC
   CALC --> MATCH
   MATCH --> ADP
-  ADP -- "HTTP 조회" --> EXT
+  ADP -- "매일 새벽 캐시" --> KRIC
+  ADP -- "배차: 매일 / 도착: 당일" --> GG
   MATCH --> NOTI
   SCHED --> CALC
   OCR -. "이미지는 메모리에서만 처리 후 폐기" .-> API

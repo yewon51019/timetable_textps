@@ -1,11 +1,13 @@
 erDiagram
   users ||--o{ timetables : "업로드"
   users ||--o| routes : "설정"
+  routes ||--|{ route_legs : "구간(집→학교 순)"
+  route_legs }o..o{ subway_timetables : "역코드로 조회"
+  route_legs }o..o| bus_routes : "노선ID로 조회"
   users ||--o{ alarm_settings : "단계별 알림 설정"
   users ||--o{ commute_plans : "날짜별 계획"
   users ||--o{ recognition_logs : "인식 기록"
   timetables ||--|{ timetable_days : "요일 5행"
-  commute_plans }o--o| transit_trips : "선택한 탑승편"
   commute_plans ||--o{ notifications : "알림 예약"
 
   users {
@@ -34,17 +36,23 @@ erDiagram
   routes {
     bigint id PK
     bigint user_id FK
-    varchar origin_name
-    varchar mode "subway_express | bus"
-    varchar line_id "노선 ID"
-    varchar stop_id "승차역·정류장 ID"
-    varchar direction
-    smallint home_to_stop_min "집→승차 이동"
-    smallint ride_to_school_min "하차→강의실"
-    smallint board_buffer_min "탑승 여유"
     smallint arrive_buffer_min "수업 전 여유"
+    smallint board_buffer_min "탑승 여유"
     smallint prep_min "준비 시간"
-    timestamp updated_at
+  }
+  route_legs {
+    bigint id PK
+    bigint route_id FK
+    smallint seq "1..n"
+    varchar kind "walk | subway | bus"
+    smallint minutes "걷기 / 버스 승차 시간"
+    varchar ln_cd "KRIC 선코드"
+    varchar board_stin_cd "KRIC 승차역"
+    varchar alight_stin_cd "KRIC 하차역"
+    boolean express_only
+    varchar bus_route_id "경기 노선ID"
+    varchar board_station_id "경기 정류소ID"
+    smallint board_sta_order "정류소 순번"
   }
   alarm_settings {
     bigint id PK
@@ -53,31 +61,33 @@ erDiagram
     smallint repeat_count ">= 1"
     smallint interval_min ">= 1"
   }
-  transit_trips {
-    bigint id PK
-    varchar line_id
-    varchar stop_id
-    varchar direction
-    varchar day_type "weekday | sat | holiday"
-    time departure_time "승차 지점 출발"
-    time arrival_time "학교 쪽 하차"
-    boolean is_express
-    timestamp fetched_at
-    timestamp valid_until
+  subway_timetables {
+    varchar stin_cd PK "KRIC 역코드"
+    char day_cd PK "7 토 / 8 평일 / 9 휴일"
+    varchar trn_no PK "열차번호 (조인 키)"
+    time arv_tm
+    time dpt_tm
+    boolean is_express "exptCd 해석"
+  }
+  bus_routes {
+    varchar bus_route_id PK
+    varchar route_name
+    time up_first_time
+    time up_last_time
+    smallint npeek_alloc "최대 배차 = 최악 대기"
   }
   commute_plans {
     bigint id PK
     bigint user_id FK
     date service_date
     bigint timetable_day_id FK
-    bigint trip_id FK
     time target_arrival
-    time boarding_time
     time depart_time
     time prep_start_time
-    varchar info_basis "realtime | timetable | none"
-    timestamp info_fetched_at
-    varchar status "planned | prep_done | departed | no_trip | free_day"
+    varchar subway_trn_no "선택 열차"
+    jsonb steps "구간별 상세"
+    varchar info_basis "realtime | timetable | headway | none"
+    varchar status
   }
   notifications {
     bigint id PK

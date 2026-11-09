@@ -1,6 +1,6 @@
 flowchart TB
   U["사용자"]
-  T["공공 교통 API"]
+  T["교통 API<br/>(KRIC 1호선 · 경기 버스)"]
   DV["기기 알림"]
 
   P1(("1.0<br/>시간표 인식<br/>FR-01"))
@@ -9,8 +9,8 @@ flowchart TB
   P4(("4.0<br/>알림 계획 · 취소<br/>FR-04"))
 
   D1[("D1 시간표<br/>timetables / timetable_days")]
-  D2[("D2 사용자 설정<br/>routes / alarm_settings")]
-  D3[("D3 교통 캐시<br/>transit_trips")]
+  D2[("D2 사용자 설정<br/>routes / route_legs / alarm_settings")]
+  D3[("D3 교통 캐시<br/>subway_timetables / bus_routes")]
   D4[("D4 등교 계획<br/>commute_plans")]
   D5[("D5 알림<br/>notifications")]
   D6[("D6 인식 로그<br/>recognition_logs")]

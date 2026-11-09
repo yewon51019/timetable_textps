@@ -39,21 +39,44 @@ CREATE TABLE timetable_days (
     CHECK ((status = 'class') = (first_class_time IS NOT NULL))
 );
 
--- FR-02 경로·시간 설정 (MVP: 사용자당 경로 1개)
+-- FR-02 경로 설정 (MVP: 사용자당 경로 1개). 시간 값은 경로 전체에 공통
 CREATE TABLE routes (
     id                  BIGSERIAL PRIMARY KEY,
     user_id             BIGINT      NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-    origin_name         VARCHAR(100) NOT NULL,
-    mode                VARCHAR(16) NOT NULL CHECK (mode IN ('subway_express', 'bus')),
-    line_id             VARCHAR(32) NOT NULL,                 -- 공공 API의 노선 ID
-    stop_id             VARCHAR(32) NOT NULL,                 -- 승차역·정류장 ID
-    direction           VARCHAR(32) NOT NULL,
-    home_to_stop_min    SMALLINT    NOT NULL CHECK (home_to_stop_min   >= 0),
-    ride_to_school_min  SMALLINT    NOT NULL DEFAULT 0 CHECK (ride_to_school_min >= 0),
-    board_buffer_min    SMALLINT    NOT NULL DEFAULT 3 CHECK (board_buffer_min  >= 0),
-    arrive_buffer_min   SMALLINT    NOT NULL CHECK (arrive_buffer_min  >= 0),
-    prep_min            SMALLINT    NOT NULL CHECK (prep_min           >= 0),
+    name                VARCHAR(50) NOT NULL DEFAULT '등교',
+    arrive_buffer_min   SMALLINT    NOT NULL CHECK (arrive_buffer_min >= 0),   -- 수업 전 여유
+    board_buffer_min    SMALLINT    NOT NULL DEFAULT 3 CHECK (board_buffer_min >= 0),  -- 열차 탑승 여유
+    prep_min            SMALLINT    NOT NULL CHECK (prep_min >= 0),            -- 준비 시간
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 경로를 이루는 구간: 집 → 학교 순서(seq). 예) 걷기 → 1호선 급행 → 걷기 → 마을버스 → 걷기
+-- 설정 화면에서 사용자가 역·정류소·노선을 고르면 API로 얻은 ID를 그대로 저장한다 (transit_api.md 참고)
+CREATE TABLE route_legs (
+    id                  BIGSERIAL PRIMARY KEY,
+    route_id            BIGINT      NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+    seq                 SMALLINT    NOT NULL CHECK (seq >= 1),
+    kind                VARCHAR(8)  NOT NULL CHECK (kind IN ('walk', 'subway', 'bus')),
+    minutes             SMALLINT    CHECK (minutes >= 0),   -- walk: 걷는 시간 / bus: 승차~하차 시간
+    -- subway (KRIC subwayRouteInfo 의 코드)
+    rail_opr_cd         VARCHAR(4),                         -- KR = 한국철도
+    ln_cd               VARCHAR(4),                         -- 1 = 1호선
+    board_stin_cd       VARCHAR(8),
+    board_stin_nm       VARCHAR(30),
+    alight_stin_cd      VARCHAR(8),
+    alight_stin_nm      VARCHAR(30),
+    express_only        BOOLEAN     DEFAULT TRUE,
+    -- bus (경기도 버스 v2 의 ID)
+    bus_route_id        VARCHAR(12),
+    bus_route_name      VARCHAR(20),
+    board_station_id    VARCHAR(12),
+    board_sta_order     SMALLINT,                           -- 도착정보 조회에 필요한 정류소 순번
+    alight_station_id   VARCHAR(12),
+    UNIQUE (route_id, seq),
+    CHECK (kind <> 'walk'   OR minutes IS NOT NULL),
+    CHECK (kind <> 'subway' OR (ln_cd IS NOT NULL AND board_stin_cd IS NOT NULL AND alight_stin_cd IS NOT NULL)),
+    CHECK (kind <> 'bus'    OR (minutes IS NOT NULL AND bus_route_id IS NOT NULL
+                                AND board_station_id IS NOT NULL AND board_sta_order IS NOT NULL))
 );
 
 -- FR-04 단계별 알림 설정 (prep, depart 각 1행)
@@ -66,35 +89,45 @@ CREATE TABLE alarm_settings (
     UNIQUE (user_id, stage)
 );
 
--- FR-03 교통 시각표 캐시: API 실패 시 유효 기간 내 시각표로 대체 (PRD 3.2 안정성)
--- 사용자와 무관한 공용 데이터라 routes와 FK로 묶지 않고 (line_id, stop_id, direction)으로 조회한다
-CREATE TABLE transit_trips (
-    id              BIGSERIAL PRIMARY KEY,
-    line_id         VARCHAR(32) NOT NULL,
-    stop_id         VARCHAR(32) NOT NULL,
-    direction       VARCHAR(32) NOT NULL,
-    day_type        VARCHAR(8)  NOT NULL CHECK (day_type IN ('weekday', 'sat', 'holiday')),
-    departure_time  TIME        NOT NULL,       -- 승차 지점 출발
-    arrival_time    TIME        NOT NULL,       -- 학교 쪽 하차
-    is_express      BOOLEAN     NOT NULL DEFAULT FALSE,
-    fetched_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    valid_until     TIMESTAMPTZ NOT NULL,
-    UNIQUE (line_id, stop_id, direction, day_type, departure_time)
+-- FR-03 지하철 시각표 캐시 = KRIC subwayTimetableExp 응답 그대로 (역 1개 × 요일구분)
+-- 승차역·하차역 행을 trn_no 로 조인해 "이 열차를 타면 몇 시에 내리는지"를 얻는다
+CREATE TABLE subway_timetables (
+    rail_opr_cd   VARCHAR(4)  NOT NULL,
+    ln_cd         VARCHAR(4)  NOT NULL,
+    stin_cd       VARCHAR(8)  NOT NULL,
+    day_cd        CHAR(1)     NOT NULL CHECK (day_cd IN ('7', '8', '9')),   -- 7 토 / 8 평일 / 9 휴일
+    trn_no        VARCHAR(10) NOT NULL,
+    arv_tm        TIME,
+    dpt_tm        TIME,
+    is_express    BOOLEAN     NOT NULL,     -- exptCd 를 해석한 값
+    expt_cd       VARCHAR(4),               -- 원본 코드 (해석 규칙 바뀌면 재계산)
+    fetched_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (rail_opr_cd, ln_cd, stin_cd, day_cd, trn_no)
 );
-CREATE INDEX ix_trips_lookup ON transit_trips(line_id, stop_id, direction, day_type, arrival_time);
 
--- FR-03 결과: 사용자 × 날짜 1행
+-- FR-03 버스 노선 정보 캐시 = 경기 getBusRouteInfoItemv2 (첫차·막차·배차). 버스는 시각표가 없어 배차로 계획
+CREATE TABLE bus_routes (
+    bus_route_id   VARCHAR(12) PRIMARY KEY,
+    route_name     VARCHAR(20) NOT NULL,
+    up_first_time  TIME,
+    up_last_time   TIME,
+    peek_alloc     SMALLINT,    -- 평일 최소 배차(분)
+    npeek_alloc    SMALLINT,    -- 평일 최대 배차(분) → 최악 대기 시간으로 사용
+    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- FR-03 결과: 사용자 × 날짜 1행. 구간별 상세(열차번호, 버스 대기 근거)는 steps 에 그대로 저장
 CREATE TABLE commute_plans (
     id                BIGSERIAL PRIMARY KEY,
     user_id           BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     service_date      DATE        NOT NULL,
     timetable_day_id  BIGINT      REFERENCES timetable_days(id) ON DELETE SET NULL,
-    trip_id           BIGINT      REFERENCES transit_trips(id) ON DELETE SET NULL,
     target_arrival    TIME,
-    boarding_time     TIME,
     depart_time       TIME,
     prep_start_time   TIME,
-    info_basis        VARCHAR(16) CHECK (info_basis IN ('realtime', 'timetable', 'none')),
+    subway_trn_no     VARCHAR(10),          -- 선택한 열차 (없으면 NULL)
+    steps             JSONB,                -- planner.Plan.steps
+    info_basis        VARCHAR(16) CHECK (info_basis IN ('realtime', 'timetable', 'headway', 'none')),
     info_fetched_at   TIMESTAMPTZ,              -- 화면에 "정보 기준 시각"으로 표시 (AC-03-03)
     status            VARCHAR(16) NOT NULL DEFAULT 'planned'
                       CHECK (status IN ('planned', 'prep_done', 'departed', 'no_trip', 'free_day', 'needs_check')),

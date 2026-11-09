@@ -13,20 +13,26 @@ INSERT INTO timetable_days (timetable_id, weekday, first_class_time, status, con
     (1, 3, NULL,    'free',  NULL),
     (1, 4, '15:00', 'class', 0.96);
 
--- FR-02: 설정 (AC-03-04 예시값: 집→승차 10분, 탑승 여유 3분, 준비 30분 / AC-02-03: 여유 15분)
-INSERT INTO routes (user_id, origin_name, mode, line_id, stop_id, direction,
-                    home_to_stop_min, ride_to_school_min, board_buffer_min, arrive_buffer_min, prep_min)
-VALUES (1, '집', 'subway_express', 'L1', 'S_HOME', 'down', 10, 20, 3, 15, 30);
+-- FR-02: 경로 = 걷기 10분 → 1호선 급행(금정→안양) → 걷기 20분  (AC-03-04 예시값: 탑승 여유 3, 준비 30 / AC-02-03: 여유 15)
+INSERT INTO routes (user_id, arrive_buffer_min, board_buffer_min, prep_min) VALUES (1, 15, 3, 30);
+INSERT INTO route_legs (route_id, seq, kind, minutes) VALUES (1, 1, 'walk', 10);
+INSERT INTO route_legs (route_id, seq, kind, rail_opr_cd, ln_cd, board_stin_cd, board_stin_nm, alight_stin_cd, alight_stin_nm)
+VALUES (1, 2, 'subway', 'KR', '1', 'GJ', '금정', 'AY', '안양');   -- 역코드는 가상값 (실제 값은 KRIC 응답으로 채움)
+INSERT INTO route_legs (route_id, seq, kind, minutes) VALUES (1, 3, 'walk', 20);
 INSERT INTO alarm_settings (user_id, stage, repeat_count, interval_min) VALUES
     (1, 'prep', 2, 10),
     (1, 'depart', 3, 5);   -- AC-04-04 예시값
 
--- FR-03: 교통 시각표 캐시 (가상 데이터)
-INSERT INTO transit_trips (line_id, stop_id, direction, day_type, departure_time, arrival_time, is_express, valid_until) VALUES
-    ('L1', 'S_HOME', 'down', 'weekday', '07:50', '08:15', TRUE,  now() + interval '7 days'),
-    ('L1', 'S_HOME', 'down', 'weekday', '08:10', '08:25', TRUE,  now() + interval '7 days'),
-    ('L1', 'S_HOME', 'down', 'weekday', '08:20', '08:45', FALSE, now() + interval '7 days'),
-    ('L1', 'S_HOME', 'down', 'weekday', '08:30', '08:55', TRUE,  now() + interval '7 days');
+-- FR-03: KRIC subwayTimetableExp 캐시 (가상 데이터, 승차역·하차역 각각)
+INSERT INTO subway_timetables (rail_opr_cd, ln_cd, stin_cd, day_cd, trn_no, arv_tm, dpt_tm, is_express, expt_cd) VALUES
+    ('KR', '1', 'GJ', '8', 'K101', '08:09:30', '08:10', TRUE,  '1'),
+    ('KR', '1', 'GJ', '8', 'K103', '08:19:30', '08:20', FALSE, '0'),
+    ('KR', '1', 'GJ', '8', 'K105', '08:29:30', '08:30', TRUE,  '1'),
+    ('KR', '1', 'GJ', '8', 'K102', '08:14:30', '08:15', FALSE, '0'),   -- 반대 방향
+    ('KR', '1', 'AY', '8', 'K101', '08:25', '08:25:30', TRUE,  '1'),
+    ('KR', '1', 'AY', '8', 'K103', '08:40', '08:40:30', FALSE, '0'),
+    ('KR', '1', 'AY', '8', 'K105', '08:45', '08:45:30', TRUE,  '1'),
+    ('KR', '1', 'AY', '8', 'K102', '08:00', '08:00:30', FALSE, '0');
 
 -- ① 다음 수업일(월요일)의 첫 수업과 도착 목표 시각 (AC-02-03: 09:00 − 15분 = 08:45)
 \echo '① 월요일 첫 수업 / 도착 목표'
@@ -36,36 +42,41 @@ JOIN timetable_days d ON d.timetable_id = t.id
 JOIN routes r ON r.user_id = t.user_id
 WHERE t.user_id = 1 AND t.status = 'confirmed' AND d.weekday = 0;
 
--- ② 목표 시각 안에 도착하는 가장 늦은 급행편 (REQ-03-02)
---    하차 08:25 + 학교까지 20분 = 08:45 ≤ 목표 08:45 → 08:10 급행 선택
---    출발 = 08:10 − 10 − 3 = 07:57, 준비 시작 = 07:57 − 30 = 07:27  (AC-03-04)
-\echo '② 탑승편 · 출발 · 준비 시각'
-WITH target AS (
-    SELECT r.*, d.id AS day_id,
-           d.first_class_time - make_interval(mins => r.arrive_buffer_min) AS target_arrival
-    FROM timetables t
-    JOIN timetable_days d ON d.timetable_id = t.id
-    JOIN routes r ON r.user_id = t.user_id
-    WHERE t.user_id = 1 AND t.status = 'confirmed' AND d.weekday = 0
+-- ② 승차역·하차역 시각표를 열차번호로 조인 → 하차 + 이후 걷기 ≤ 목표 인 급행 중 가장 늦은 열차
+--    반대 방향(K102)은 하차역 도착이 승차역 출발보다 빨라 자동으로 빠진다
+--    08:10 급행 → 08:25 안양 + 20분 = 08:45 OK → 출발 = 08:10 − 3 − 10 = 07:57, 준비 = 07:27 (AC-03-04)
+--    (실서비스에서는 이 계산을 transit/planner.py 가 하고, 여기서는 SQL로도 같은 결과가 나오는지 확인)
+\echo '② 열차 조인 결과와 선택된 열차'
+WITH r AS (
+    SELECT rt.*, d.id AS day_id, d.first_class_time - make_interval(mins => rt.arrive_buffer_min) AS target,
+           s.rail_opr_cd, s.ln_cd, s.board_stin_cd, s.alight_stin_cd, s.express_only,
+           (SELECT minutes FROM route_legs WHERE route_id = rt.id AND seq = 1) AS walk_before,
+           (SELECT minutes FROM route_legs WHERE route_id = rt.id AND seq = 3) AS walk_after
+    FROM routes rt
+    JOIN route_legs s ON s.route_id = rt.id AND s.kind = 'subway'
+    JOIN timetables t ON t.user_id = rt.user_id AND t.status = 'confirmed'
+    JOIN timetable_days d ON d.timetable_id = t.id AND d.weekday = 0
+    WHERE rt.user_id = 1
+), trips AS (
+    SELECT b.trn_no, b.dpt_tm AS board_dep, a.arv_tm AS alight_arr, b.is_express
+    FROM r
+    JOIN subway_timetables b ON (b.rail_opr_cd, b.ln_cd, b.stin_cd, b.day_cd) = (r.rail_opr_cd, r.ln_cd, r.board_stin_cd, '8')
+    JOIN subway_timetables a ON (a.rail_opr_cd, a.ln_cd, a.stin_cd, a.day_cd, a.trn_no) = (r.rail_opr_cd, r.ln_cd, r.alight_stin_cd, '8', b.trn_no)
+    WHERE a.arv_tm > b.dpt_tm
 ), pick AS (
-    SELECT tg.*, tr.id AS trip_id, tr.departure_time AS boarding_time
-    FROM target tg
-    JOIN transit_trips tr
-      ON tr.line_id = tg.line_id AND tr.stop_id = tg.stop_id AND tr.direction = tg.direction
-     AND tr.day_type = 'weekday' AND tr.is_express = (tg.mode = 'subway_express')
-     AND tr.valid_until > now()
-     AND tr.arrival_time + make_interval(mins => tg.ride_to_school_min) <= tg.target_arrival
-    ORDER BY tr.departure_time DESC
-    LIMIT 1
+    SELECT trips.* FROM trips, r
+    WHERE (trips.is_express OR NOT r.express_only)
+      AND trips.alight_arr + make_interval(mins => r.walk_after) <= r.target
+    ORDER BY board_dep DESC LIMIT 1
 )
-INSERT INTO commute_plans (user_id, service_date, timetable_day_id, trip_id, target_arrival,
-                           boarding_time, depart_time, prep_start_time, info_basis, info_fetched_at)
-SELECT user_id, DATE '2026-11-09', day_id, trip_id, target_arrival, boarding_time,
-       boarding_time - make_interval(mins => home_to_stop_min + board_buffer_min),
-       boarding_time - make_interval(mins => home_to_stop_min + board_buffer_min + prep_min),
-       'timetable', now()
-FROM pick
-RETURNING service_date, target_arrival, boarding_time, depart_time, prep_start_time;
+INSERT INTO commute_plans (user_id, service_date, timetable_day_id, target_arrival, depart_time,
+                           prep_start_time, subway_trn_no, info_basis, info_fetched_at)
+SELECT r.user_id, DATE '2026-11-09', r.day_id, r.target,
+       p.board_dep - make_interval(mins => r.board_buffer_min + r.walk_before),
+       p.board_dep - make_interval(mins => r.board_buffer_min + r.walk_before + r.prep_min),
+       p.trn_no, 'timetable', now()
+FROM r, pick p
+RETURNING service_date, target_arrival, subway_trn_no, depart_time, prep_start_time;
 
 -- ③ 단계별 알림 예약: 기준 − (n−1)k … 기준 (REQ-04-02)
 --    출발 07:57, 3회, 5분 → 07:47 · 07:52 · 07:57
