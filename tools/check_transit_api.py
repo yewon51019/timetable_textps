@@ -3,6 +3,9 @@
   # 키 없이: 엔드포인트가 실제로 존재하는지만 확인
   python -m tools.check_transit_api --probe
 
+  # ODsay 경로 → 구간 변환 → KRIC·서울/경기 버스 ID 연결 확인 (ODSAY_KEY 필요, 나머지 키는 있으면 추가 확인)
+  python -m tools.check_transit_api --odsay --from-x 126.98 --from-y 37.48 --to-x <안양대 경도> --to-y <안양대 위도>
+
   # 키가 있으면: 설정 → 계획 → 당일 순서로 실제 호출하고 응답 샘플을 저장
   export KRIC_KEY=...          # openapi.kric.go.kr 에서 발급
   export DATA_GO_KR_KEY=...    # data.go.kr 일반 인증키(Decoding)
@@ -18,8 +21,9 @@ import sys
 
 import requests
 
-from transit.clients import ApiError, GyeonggiBusClient, KricClient
+from transit.clients import ApiError, GyeonggiBusClient, KricClient, OdsayClient, SeoulBusClient
 from transit.planner import Leg, fmt, join_trips, plan_commute
+from transit.route_search import find_sta_order, legs_from_path, resolve_subway_codes
 
 OUT = os.path.join('docs', 'design', 'api_samples')
 
@@ -147,10 +151,56 @@ def check_tago_cities():
         print(f"  {want:4s}: {', '.join(hits) or '없음'}")
 
 
+def check_odsay(args):
+    """ODsay 경로 검색 → 구간 변환 → (키가 있으면) KRIC 역코드·서울/경기 노선ID가 실제로 이어지는지 확인."""
+    od = OdsayClient()
+    paths = od.search_paths(args.from_x, args.from_y, args.to_x, args.to_y)
+    save('odsay_searchPubTransPathT', paths)
+    print(f'[ODsay] 경로 후보 {len(paths)}개')
+    for i, p in enumerate(paths[:5]):
+        kinds = ' → '.join({1: '지하철', 2: '버스', 3: '도보'}[int(sp['trafficType'])] for sp in p['subPath'])
+        print(f"  {i}: {p['info'].get('totalTime')}분, {kinds}")
+    if not paths:
+        return
+    legs = legs_from_path(paths[args.path])
+    print(f'\n[변환] 경로 {args.path} → 구간 {len(legs)}개')
+    for l in legs:
+        extra = {k: l.get(k) for k in ('bus_provider', 'bus_route_name', 'bus_route_id', 'line_name',
+                                       'board_stin_nm', 'alight_stin_nm') if l.get(k)}
+        print(f"  {l['kind']:6s} {l.get('minutes')}분 {extra}")
+
+    if any(l['kind'] == 'subway' for l in legs) and os.environ.get('KRIC_KEY'):
+        kric = KricClient()
+        lines = {l['ln_cd'] for l in legs if l['kind'] == 'subway' and l['ln_cd']}
+        missing = resolve_subway_codes(legs, {ln: kric.route_stations(ln_cd=ln) for ln in lines})
+        print(f"\n[KRIC] 역코드 매핑: {'모두 성공' if not missing else '실패 ' + ', '.join(missing)}")
+
+    if os.environ.get('DATA_GO_KR_KEY'):
+        clients = {'gyeonggi': GyeonggiBusClient(), 'seoul': SeoulBusClient()}
+        for l in [x for x in legs if x['kind'] == 'bus']:
+            c = clients[l['bus_provider']]
+            try:  # ODsay busLocalBlID 가 그 기관의 노선ID와 같은 값인지 = 실제로 조회되는지
+                seq = c.route_stations(l['bus_route_id'])
+                if l['bus_provider'] == 'gyeonggi':
+                    order = find_sta_order(seq, l['board_station_id'], l['alight_station_id'])
+                else:
+                    order = find_sta_order(seq, l['board_station_id'], l['alight_station_id'], 'station', 'seq')
+                ok = '성공' if seq and order else '노선은 조회됐지만 정류소 순번 못 찾음' if seq else '노선 조회 결과 없음'
+                print(f"[{l['bus_provider']}] {l['bus_route_name']}번 노선ID {l['bus_route_id']} → {ok} (순번 {order})")
+            except Exception as e:  # noqa: BLE001 — 서울 API는 HTTP 전용이라 환경에 따라 실패할 수 있음
+                print(f"[{l['bus_provider']}] {l['bus_route_name']}번 조회 실패: {e.__class__.__name__}: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--probe', action='store_true')
     ap.add_argument('--tago-cities', action='store_true', help='TAGO 버스의 서울·경기 지원 여부 확인')
+    ap.add_argument('--odsay', action='store_true', help='ODsay 경로 검색 → 구간 변환 → 기관 API 연결 확인')
+    ap.add_argument('--from-x', type=float, help='출발 경도')
+    ap.add_argument('--from-y', type=float, help='출발 위도')
+    ap.add_argument('--to-x', type=float, help='도착 경도 (안양대 정문 좌표를 지도에서 확인해 입력)')
+    ap.add_argument('--to-y', type=float, help='도착 위도')
+    ap.add_argument('--path', type=int, default=0, help='변환해 볼 경로 후보 번호')
     ap.add_argument('--ln-cd', default='1')
     ap.add_argument('--board', default='금정')
     ap.add_argument('--alight', default='안양')
@@ -164,6 +214,13 @@ def main():
         return probe()
     if args.tago_cities:
         return check_tago_cities()
+    if args.odsay:
+        if None in (args.from_x, args.from_y, args.to_x, args.to_y):
+            sys.exit('--from-x --from-y --to-x --to-y 좌표가 필요합니다')
+        try:
+            return check_odsay(args)
+        except ApiError as e:
+            sys.exit(f'API 오류: {e}')
     try:
         trips = check_subway(args)
         bus = check_bus(args)
