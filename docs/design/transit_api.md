@@ -26,6 +26,7 @@
 | 서울교통공사 역별 시간표 (data.go.kr 15057982 등) | 서울교통공사 운영 구간만 제공. **안양·금정·명학은 한국철도(코레일) 구간** |
 | 서울시 실시간 지하철 도착정보 | 급행 표시가 있지만 MVP 범위(시각표 기반 계획)를 넘음 → Should 기능으로 보류 |
 | 서울시 대중교통환승경로 `pathinfo/getPathInfoByBusNSub` | 공공·무료지만 응답이 구간별 `routeId·fid·tid` 뿐이고 **도보 시간·노선 소속 구분이 없음**. 서울 버스정보 기반이라 경기 마을버스 포함 여부도 불확실 → ODsay 장애 시 예비 |
+| 국토교통부 TAGO 버스 (`1613000/BusRouteInfoInqireService`, `ArvlInfoInqireService`, `BusSttnInfoInqireService`) | **보류 — 키 발급 후 재검토.** 무료·개발계정 1만 건으로 한도는 더 넉넉하고, `cityCode` 하나로 여러 지역을 같은 방식으로 부를 수 있어 서울·경기를 모두 지원하면 버스 클라이언트를 하나로 줄일 수 있음. 다만 ① 지원 도시는 `getCtyCodeList`로만 확인 가능(문서에 목록 없음), ② 노선·정류소 ID가 TAGO 고유 형식(예: `DJB30300002`)이라 ODsay의 지역 BIS ID와 바로 맞지 않을 수 있음, ③ 노선 배차는 `intervaltime` 하나뿐(최소·최대 구분 없음). `python -m tools.check_transit_api --tago-cities` 로 ①부터 확인 |
 | 길찾기를 매일 호출 | ODsay는 **경로 등록·변경 때만** 호출. 매일 계산은 구간별 기관 API(시각표·배차·실시간)로 → 호출량이 적어 무료 등급으로 충분할 가능성이 큼 (정확한 무료 한도는 ODsay 콘솔에서 확인) |
 
 ## 2. 호출 시점별 흐름

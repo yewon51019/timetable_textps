@@ -29,6 +29,7 @@ PROBES = [  # (설명, URL) — 가짜 키로 불러서 '키 오류'가 오면 �
     ('경기 노선 경유정류소', 'https://apis.data.go.kr/6410000/busrouteservice/v2/getBusRouteStationListv2?routeId=1'),
     ('경기 노선 정보(배차)', 'https://apis.data.go.kr/6410000/busrouteservice/v2/getBusRouteInfoItemv2?routeId=1'),
     ('경기 버스 도착(항목)', 'https://apis.data.go.kr/6410000/busarrivalservice/v2/getBusArrivalItemv2?stationId=1&routeId=1&staOrder=1'),
+    ('TAGO 도시코드 목록', 'https://apis.data.go.kr/1613000/BusRouteInfoInqireService/getCtyCodeList?_type=json'),
     ('(대조군) 없는 오퍼레이션', 'https://apis.data.go.kr/6410000/busrouteservice/v2/notExist?routeId=1'),
 ]
 
@@ -127,9 +128,29 @@ def check_bus(args):
     return None
 
 
+def check_tago_cities():
+    """TAGO 버스가 서울·경기를 지원하는지: 도시코드 목록에 서울/경기 시·군이 있는지 확인."""
+    key = os.environ.get('DATA_GO_KR_KEY')
+    if not key:
+        sys.exit('DATA_GO_KR_KEY 환경변수가 없습니다 ("국토교통부_(TAGO)_버스노선정보" 활용신청 필요)')
+    r = requests.get('https://apis.data.go.kr/1613000/BusRouteInfoInqireService/getCtyCodeList',
+                     params={'serviceKey': key, '_type': 'json'}, timeout=15)
+    data = r.json()
+    if 'OpenAPI_ServiceResponse' in data:
+        sys.exit(f"TAGO: {data['OpenAPI_ServiceResponse'].get('cmmMsgHeader', {}).get('errMsg')}")
+    items = data['response']['body']['items']['item']
+    items = items if isinstance(items, list) else [items]
+    save('tago_getCtyCodeList', items)
+    print(f'TAGO 지원 도시 {len(items)}곳 (전체 목록은 api_samples/tago_getCtyCodeList.json)')
+    for want in ('서울', '안양', '군포', '의왕', '과천', '수원', '성남', '경기'):
+        hits = [f"{c['cityname']}({c['citycode']})" for c in items if want in str(c['cityname'])]
+        print(f"  {want:4s}: {', '.join(hits) or '없음'}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--probe', action='store_true')
+    ap.add_argument('--tago-cities', action='store_true', help='TAGO 버스의 서울·경기 지원 여부 확인')
     ap.add_argument('--ln-cd', default='1')
     ap.add_argument('--board', default='금정')
     ap.add_argument('--alight', default='안양')
@@ -141,6 +162,8 @@ def main():
 
     if args.probe:
         return probe()
+    if args.tago_cities:
+        return check_tago_cities()
     try:
         trips = check_subway(args)
         bus = check_bus(args)
