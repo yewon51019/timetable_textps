@@ -7,6 +7,7 @@
 | 시스템 구조도 | 어떤 **부품**이 있고 서로 어떻게 연결되나 | `diagrams/1_system_architecture.*` |
 | 데이터 흐름도 (DFD) | **어떤 데이터**가 어디서 와서 어떤 처리를 거쳐 어디에 쌓이나 | `diagrams/2_dfd_level0.*`, `3_dfd_level1.*` |
 | DB 설계도 (ERD) | 쌓이는 데이터가 **어떤 표·열·관계**로 저장되나 | `diagrams/4_erd.*`, `schema.sql` |
+| **ODsay → TAGO 연결 · FastAPI 방법** | 경로 검색 결과를 TAGO·KRIC에 잇는 절차와 엔드포인트 | **`odsay_tago_fastapi.md`** |
 | **교통 API 결정서** | 구간별로 **어떤 API를 언제·어떤 조건으로** 부르고 어떻게 조합하나 | **`transit_api.md`**, `transit/`, `tools/check_transit_api.py` |
 
 세 도면은 같은 이름을 공유해야 합니다: 구조도의 **모듈 = DFD의 프로세스(1.0~4.0) = FR 번호**, DFD의 **저장소 D1~D6 = ERD 테이블**. 이렇게 맞추면 "이 기능이 어떤 데이터를 쓰고 어디에 저장하나"를 세 도면으로 추적할 수 있습니다.
